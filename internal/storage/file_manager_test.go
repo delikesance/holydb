@@ -1,27 +1,28 @@
 package storage
 
 import (
-	"fmt"
-	"testing"
+"fmt"
+"testing"
+indexpkg "github.com/delikesance/holydb/internal/index"
 )
 
 type mockIndex struct {
-	entries map[uint64]IndexEntry
+	entries map[uint64]indexpkg.IndexEntry
 }
 
 func newMockIndex() *mockIndex {
 	return &mockIndex{
-		entries: make(map[uint64]IndexEntry),
+		entries: make(map[uint64]indexpkg.IndexEntry),
 	}
 }
 
-func (m *mockIndex) Insert(entry IndexEntry) error {
-	m.entries[entry.KeyHash] = entry
+func (m *mockIndex) Insert(entry indexpkg.IndexEntry) error {
+m.entries[entry.KeyHash] = entry
 	return nil
 }
 
-func (m *mockIndex) Lookup(keyHash uint64) (*IndexEntry, error) {
-	entry, exists := m.entries[keyHash]
+func (m *mockIndex) Lookup(keyHash uint64) (*indexpkg.IndexEntry, error) {
+entry, exists := m.entries[keyHash]
 	if exists {
 		return &entry, nil
 	}

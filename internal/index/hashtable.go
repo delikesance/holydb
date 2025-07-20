@@ -14,34 +14,34 @@ const (
 )
 
 type IndexEntry struct {
-	KeyHash   uint64
-	SegmentID uint32
-	Offset    uint64
-	Size      uint32
-	Timestamp uint64
+KeyHash   uint64
+SegmentID uint32
+Offset    uint64
+Size      uint32
+Timestamp uint64
 }
 
 type HashTable struct {
-	buckets    [][]IndexEntry
-	size       uint64
-	count      uint64
-	loadFactor float64
-	bloom      *BloomFilter
-	mu         sync.RWMutex
+buckets    [][]IndexEntry
+size       uint64
+count      uint64
+loadFactor float64
+bloom      *BloomFilter
+mu         sync.RWMutex
 }
 
 func NewHashTable(initialSize uint64) *HashTable {
-	bloomConfig := BloomFilterConfig{
-		ExpectedElements:  initialSize * 4,
-		FalsePositiveRate: 0.01,
-	}
+bloomConfig := BloomFilterConfig{
+ExpectedElements:  initialSize * 4,
+FalsePositiveRate: 0.01,
+}
 
-	return &HashTable{
-		buckets:    make([][]IndexEntry, initialSize),
-		size:       initialSize,
-		loadFactor: LOAD_FACTOR,
-		bloom:      NewBloomFilter(bloomConfig),
-	}
+return &HashTable{
+buckets:    make([][]IndexEntry, initialSize),
+size:       initialSize,
+loadFactor: LOAD_FACTOR,
+bloom:      NewBloomFilter(bloomConfig),
+}
 }
 
 func (ht *HashTable) hash(keyHash uint64) uint64 {
@@ -49,47 +49,47 @@ func (ht *HashTable) hash(keyHash uint64) uint64 {
 }
 
 func (ht *HashTable) Insert(entry IndexEntry) error {
-	ht.mu.Lock()
-	defer ht.mu.Unlock()
+ht.mu.Lock()
+defer ht.mu.Unlock()
 
-	if float64(ht.count)/float64(ht.size) > ht.loadFactor {
-		ht.resize()
-	}
+if float64(ht.count)/float64(ht.size) > ht.loadFactor {
+ht.resize()
+}
 
-	bucket := ht.hash(entry.KeyHash)
+bucket := ht.hash(entry.KeyHash)
 
-	for i, existing := range ht.buckets[bucket] {
-		if existing.KeyHash == entry.KeyHash {
-			ht.buckets[bucket][i] = entry
-			return nil
-		}
-	}
+for i, existing := range ht.buckets[bucket] {
+if existing.KeyHash == entry.KeyHash {
+ht.buckets[bucket][i] = entry
+return nil
+}
+}
 
-	ht.buckets[bucket] = append(ht.buckets[bucket], entry)
-	ht.count++
+ht.buckets[bucket] = append(ht.buckets[bucket], entry)
+ht.count++
 
-	ht.bloom.AddHash(entry.KeyHash)
+ht.bloom.AddHash(entry.KeyHash)
 
-	return nil
+return nil
 }
 
 func (ht *HashTable) Lookup(keyHash uint64) (*IndexEntry, error) {
-	if !ht.bloom.ContainsHash(keyHash) {
-		return nil, ErrNotFound
-	}
+if !ht.bloom.ContainsHash(keyHash) {
+return nil, ErrNotFound
+}
 
-	ht.mu.RLock()
-	defer ht.mu.RUnlock()
+ht.mu.RLock()
+defer ht.mu.RUnlock()
 
-	bucket := ht.hash(keyHash)
+bucket := ht.hash(keyHash)
 
-	for _, entry := range ht.buckets[bucket] {
-		if entry.KeyHash == keyHash {
-			return &entry, nil
-		}
-	}
+for _, entry := range ht.buckets[bucket] {
+if entry.KeyHash == keyHash {
+return &entry, nil
+}
+}
 
-	return nil, ErrNotFound
+return nil, ErrNotFound
 }
 
 func (ht *HashTable) Delete(keyHash uint64) error {
@@ -150,11 +150,16 @@ func (ht *HashTable) GetBloomStats() BloomStats {
 }
 
 func NewIndexEntry(keyHash uint64, segmentID uint32, offset uint64, size uint32) IndexEntry {
-	return IndexEntry{
-		KeyHash:   keyHash,
-		SegmentID: segmentID,
-		Offset:    offset,
-		Size:      size,
-		Timestamp: uint64(time.Now().UnixNano()),
-	}
+return IndexEntry{
+KeyHash:   keyHash,
+SegmentID: segmentID,
+Offset:    offset,
+Size:      size,
+Timestamp: uint64(time.Now().UnixNano()),
+}
+}
+
+type IndexInterface interface {
+    Insert(entry IndexEntry) error
+    Lookup(keyHash uint64) (*IndexEntry, error)
 }

@@ -6,15 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-)
 
-type IndexEntry struct {
-	KeyHash   uint64
-	SegmentID uint32
-	Offset    uint64
-	Size      uint32
-	Timestamp uint64
-}
+	indexpkg "github.com/delikesance/holydb/internal/index"
+)
 
 type FileManager struct {
 	chunkManager *ChunkManager
@@ -27,7 +21,7 @@ func NewFileManager(chunkSize uint32) *FileManager {
 	}
 }
 
-func (fm *FileManager) StoreFile(key string, data []byte, segments []*Segment, index IndexInterface) (*FileMetadata, error) {
+func (fm *FileManager) StoreFile(key string, data []byte, segments []*Segment, index indexpkg.IndexInterface) (*FileMetadata, error) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 
@@ -38,7 +32,7 @@ func (fm *FileManager) StoreFile(key string, data []byte, segments []*Segment, i
 	return fm.storeLargeFile(key, data, segments, index)
 }
 
-func (fm *FileManager) storeSmallFile(key string, data []byte, segment *Segment, index IndexInterface) (*FileMetadata, error) {
+func (fm *FileManager) storeSmallFile(key string, data []byte, segment *Segment, index indexpkg.IndexInterface) (*FileMetadata, error) {
 	keyHash := HashKey(key)
 
 	offset, err := segment.WriteRecord(keyHash, data)
@@ -58,11 +52,12 @@ func (fm *FileManager) storeSmallFile(key string, data []byte, segment *Segment,
 		}},
 	}
 
-	if err := index.Insert(IndexEntry{
+	if err := index.Insert(indexpkg.IndexEntry{
 		KeyHash:   keyHash,
 		SegmentID: uint32(segment.ID),
 		Offset:    offset,
 		Size:      uint32(len(data)),
+		Timestamp: 0,
 	}); err != nil {
 		return nil, fmt.Errorf("erreur lors de la mise à jour de l'index: %w", err)
 	}
@@ -70,7 +65,7 @@ func (fm *FileManager) storeSmallFile(key string, data []byte, segment *Segment,
 	return metadata, nil
 }
 
-func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segment, index IndexInterface) (*FileMetadata, error) {
+func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segment, index indexpkg.IndexInterface) (*FileMetadata, error) {
 	chunks, metadata, err := fm.chunkManager.SplitIntoChunks(data)
 	if err != nil {
 		return nil, fmt.Errorf("erreur lors du chunking: %w", err)
@@ -91,12 +86,12 @@ func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segme
 
 				metadata.Chunks[i].Offset = offset
 				metadata.Chunks[i].SegmentID = uint32(segment.ID)
-
-				if err := index.Insert(IndexEntry{
+				if err := index.Insert(indexpkg.IndexEntry{
 					KeyHash:   chunkKeyHash,
 					SegmentID: uint32(segment.ID),
 					Offset:    offset,
 					Size:      uint32(len(chunk)),
+					Timestamp: 0,
 				}); err != nil {
 					return nil, fmt.Errorf("erreur lors de la mise à jour de l'index pour le chunk %d: %w", i, err)
 				}
@@ -120,11 +115,12 @@ func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segme
 		return nil, fmt.Errorf("erreur lors de l'écriture des métadonnées: %w", err)
 	}
 
-	if err := index.Insert(IndexEntry{
+	if err := index.Insert(indexpkg.IndexEntry{
 		KeyHash:   metadataKeyHash,
 		SegmentID: uint32(metadataSegment.ID),
 		Offset:    metadataOffset,
 		Size:      uint32(len(metadataBytes)),
+		Timestamp: 0,
 	}); err != nil {
 		return nil, fmt.Errorf("erreur lors de la mise à jour de l'index pour les métadonnées: %w", err)
 	}
@@ -132,7 +128,7 @@ func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segme
 	return metadata, nil
 }
 
-func (fm *FileManager) RetrieveFile(key string, segments map[uint32]*Segment, index IndexInterface) ([]byte, error) {
+func (fm *FileManager) RetrieveFile(key string, segments map[uint32]*Segment, index indexpkg.IndexInterface) ([]byte, error) {
 	fm.mu.RLock()
 	defer fm.mu.RUnlock()
 
@@ -161,7 +157,7 @@ func (fm *FileManager) RetrieveFile(key string, segments map[uint32]*Segment, in
 	return record.Data, nil
 }
 
-func (fm *FileManager) retrieveLargeFile(key string, metadataEntry *IndexEntry, segments map[uint32]*Segment, index IndexInterface) ([]byte, error) {
+func (fm *FileManager) retrieveLargeFile(key string, metadataEntry *indexpkg.IndexEntry, segments map[uint32]*Segment, index indexpkg.IndexInterface) ([]byte, error) {
 	metadataSegment, exists := segments[metadataEntry.SegmentID]
 	if !exists {
 		return nil, fmt.Errorf("segment de métadonnées %d non trouvé", metadataEntry.SegmentID)
@@ -199,11 +195,6 @@ func (fm *FileManager) retrieveLargeFile(key string, metadataEntry *IndexEntry, 
 	}
 
 	return fm.chunkManager.ReassembleChunks(chunks, metadata)
-}
-
-type IndexInterface interface {
-	Insert(entry IndexEntry) error
-	Lookup(keyHash uint64) (*IndexEntry, error)
 }
 
 func HashKey(key string) uint64 {
