@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"hash/crc32"
 	"os"
@@ -14,12 +15,15 @@ type OpType uint8
 const (
 	OpPut OpType = iota
 	OpDelete
+	OpUpdate   // Mise à jour d'une entrée existante
+	OpCompact  // Opération de compaction
 )
 
 type WALEntry struct {
 	Timestamp uint64
 	OpType    OpType
 	KeyHash   uint64
+	DataType  uint8     // Type de données (utilise le même enum que DataType)
 	DataSize  uint32
 	Data      []byte
 	Checksum  uint32
@@ -29,6 +33,8 @@ type WAL struct {
 	file       *os.File
 	writer     *bufio.Writer
 	syncTicker *time.Ticker
+	ctx        context.Context
+	cancel     context.CancelFunc
 	mu         sync.Mutex
 }
 
@@ -38,10 +44,13 @@ func NewWal(filepath string) (*WAL, error) {
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	wal := &WAL{
 		file:       file,
 		writer:     bufio.NewWriter(file),
 		syncTicker: time.NewTicker(time.Second),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	go wal.periodicSync()
@@ -64,6 +73,10 @@ func (w *WAL) Append(entry WALEntry) error {
 	}
 
 	if err := binary.Write(w.writer, binary.LittleEndian, entry.KeyHash); err != nil {
+		return err
+	}
+
+	if err := binary.Write(w.writer, binary.LittleEndian, entry.DataType); err != nil {
 		return err
 	}
 
@@ -94,8 +107,13 @@ func (w *WAL) Sync() error {
 }
 
 func (w *WAL) periodicSync() {
-	for range w.syncTicker.C {
-		w.Sync()
+	for {
+		select {
+		case <-w.syncTicker.C:
+			w.Sync()
+		case <-w.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -104,7 +122,19 @@ func (w *WAL) calculateChecksum(entry WALEntry) uint32 {
 }
 
 func (w *WAL) Close() error {
+	w.cancel() // Arrêter la goroutine
 	w.syncTicker.Stop()
 	w.Sync()
 	return w.file.Close()
+}
+
+// NewWALEntry crée une nouvelle entrée WAL avec le type spécifié
+func NewWALEntry(opType OpType, keyHash uint64, dataType uint8, data []byte) WALEntry {
+	return WALEntry{
+		OpType:   opType,
+		KeyHash:  keyHash,
+		DataType: dataType,
+		DataSize: uint32(len(data)),
+		Data:     data,
+	}
 }
