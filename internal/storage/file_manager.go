@@ -8,36 +8,19 @@ import (
 	"sync"
 )
 
-// IndexEntry représente une entrée d'index (dupliquée temporairement depuis index package)
+// IndexEntry représente une entrée d'index (simplifié sans type)
 type IndexEntry struct {
 	KeyHash   uint64
 	SegmentID uint32
 	Offset    uint64
 	Size      uint32
 	Timestamp uint64
-	Type      uint8
-	Reserved  [31]byte
 }
-
-// DataType pour les types de données (dupliqué temporairement)
-type DataType uint8
-
-const (
-	TypeKeyValue DataType = iota
-	TypeDocument
-	TypeFile
-	TypeSchema
-	TypeIndex
-	TypeStream
-	TypeGraph
-	TypeTimeSeries
-)
 
 // FileManager gère le stockage et la récupération de fichiers avec chunking
 type FileManager struct {
-	chunkManager   *ChunkManager
-	segmentManager *SegmentManager // À implémenter
-	mu             sync.RWMutex
+	chunkManager *ChunkManager
+	mu           sync.RWMutex
 }
 
 // NewFileManager crée un nouveau gestionnaire de fichiers
@@ -91,7 +74,6 @@ func (fm *FileManager) storeSmallFile(key string, data []byte, segment *Segment,
 		SegmentID: uint32(segment.ID),
 		Offset:    offset,
 		Size:      uint32(len(data)),
-		Type:      uint8(TypeFile),
 	}); err != nil {
 		return nil, fmt.Errorf("erreur lors de la mise à jour de l'index: %w", err)
 	}
@@ -101,8 +83,6 @@ func (fm *FileManager) storeSmallFile(key string, data []byte, segment *Segment,
 
 // storeLargeFile stocke un fichier volumineux avec chunking
 func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segment, index IndexInterface) (*FileMetadata, error) {
-	keyHash := HashKey(key)
-
 	// Découper en chunks
 	chunks, metadata, err := fm.chunkManager.SplitIntoChunks(data)
 	if err != nil {
@@ -115,12 +95,12 @@ func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segme
 		// Trouver un segment avec assez d'espace
 		for segmentIndex < len(segments) {
 			segment := segments[segmentIndex]
-			chunkSize := uint64(len(chunk)) + 13 // 4 + 8 + 1 bytes de header
+			chunkSize := uint64(len(chunk)) + 12 // 4 + 8 bytes de header (sans RecordType)
 			
 			if segment.Size+chunkSize <= MAX_SEGMENT_SIZE {
 				// Stocker le chunk
 				chunkKeyHash := HashChunkKey(key, uint32(i))
-				offset, err := segment.WriteChunk(chunkKeyHash, chunk, uint32(i))
+				offset, err := segment.WriteRecord(chunkKeyHash, chunk)
 				if err != nil {
 					return nil, fmt.Errorf("erreur lors de l'écriture du chunk %d: %w", i, err)
 				}
@@ -135,7 +115,6 @@ func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segme
 					SegmentID: uint32(segment.ID),
 					Offset:    offset,
 					Size:      uint32(len(chunk)),
-					Type:      uint8(TypeFile),
 				}); err != nil {
 					return nil, fmt.Errorf("erreur lors de la mise à jour de l'index pour le chunk %d: %w", i, err)
 				}
@@ -154,19 +133,18 @@ func (fm *FileManager) storeLargeFile(key string, data []byte, segments []*Segme
 	metadataKeyHash := HashMetadataKey(key)
 	metadataSegment := segments[0] // Stocker les métadonnées dans le premier segment
 	
-	metadataOffset, err := metadataSegment.WriteMetadata(metadataKeyHash, metadata)
+	metadataBytes := metadata.Serialize()
+	metadataOffset, err := metadataSegment.WriteRecord(metadataKeyHash, metadataBytes)
 	if err != nil {
 		return nil, fmt.Errorf("erreur lors de l'écriture des métadonnées: %w", err)
 	}
 
 	// Mettre à jour l'index pour les métadonnées
-	metadataBytes := metadata.Serialize()
 	if err := index.Insert(IndexEntry{
 		KeyHash:   metadataKeyHash,
 		SegmentID: uint32(metadataSegment.ID),
 		Offset:    metadataOffset,
 		Size:      uint32(len(metadataBytes)),
-		Type:      uint8(TypeSchema), // Métadonnées stockées comme schéma
 	}); err != nil {
 		return nil, fmt.Errorf("erreur lors de la mise à jour de l'index pour les métadonnées: %w", err)
 	}
@@ -200,7 +178,12 @@ func (fm *FileManager) RetrieveFile(key string, segments map[uint32]*Segment, in
 		return nil, fmt.Errorf("segment %d non trouvé", entry.SegmentID)
 	}
 
-	return segment.ReadRecord(entry.Offset, entry.Size)
+	record, err := segment.ReadRecord(entry.Offset, entry.Size)
+	if err != nil {
+		return nil, err
+	}
+	
+	return record.Data, nil
 }
 
 // retrieveLargeFile récupère et réassemble un fichier chunké
@@ -211,9 +194,14 @@ func (fm *FileManager) retrieveLargeFile(key string, metadataEntry *IndexEntry, 
 		return nil, fmt.Errorf("segment de métadonnées %d non trouvé", metadataEntry.SegmentID)
 	}
 
-	metadata, err := metadataSegment.ReadMetadata(metadataEntry.Offset, metadataEntry.Size)
+	metadataRecord, err := metadataSegment.ReadRecord(metadataEntry.Offset, metadataEntry.Size)
 	if err != nil {
 		return nil, fmt.Errorf("erreur lors de la lecture des métadonnées: %w", err)
+	}
+
+	metadata, err := DeserializeMetadata(metadataRecord.Data)
+	if err != nil {
+		return nil, fmt.Errorf("erreur lors de la désérialisation des métadonnées: %w", err)
 	}
 
 	// Récupérer chaque chunk
@@ -235,7 +223,7 @@ func (fm *FileManager) retrieveLargeFile(key string, metadataEntry *IndexEntry, 
 			return nil, fmt.Errorf("erreur lors de la lecture du chunk %d: %w", i, err)
 		}
 
-		chunks[i] = chunkData
+		chunks[i] = chunkData.Data
 	}
 
 	// Réassembler le fichier

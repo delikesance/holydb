@@ -27,20 +27,10 @@ type SegmentHeader struct {
 	Reserved    [24]byte
 }
 
-// RecordType définit le type de record
-type RecordType uint8
-
-const (
-	RecordTypeData     RecordType = iota // Données normales
-	RecordTypeChunk                      // Chunk d'un fichier chunké
-	RecordTypeMetadata                   // Métadonnées de chunking
-)
-
 type Record struct {
-	Size       uint32
-	KeyHash    uint64
-	RecordType RecordType // Type de record
-	Data       []byte
+	Size    uint32
+	KeyHash uint64
+	Data    []byte
 }
 
 type Segment struct {
@@ -77,21 +67,16 @@ func NewSegment(id uint64, filepath string) (*Segment, error) {
 }
 
 func (s *Segment) WriteRecord(keyHash uint64, data []byte) (uint64, error) {
-	return s.WriteTypedRecord(keyHash, data, RecordTypeData)
-}
-
-func (s *Segment) WriteTypedRecord(keyHash uint64, data []byte, recordType RecordType) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	record := Record{
-		Size:       uint32(len(data)),
-		KeyHash:    keyHash,
-		RecordType: recordType,
-		Data:       data,
+		Size:    uint32(len(data)),
+		KeyHash: keyHash,
+		Data:    data,
 	}
 
-	recordSize := 4 + 8 + 1 + uint64(len(data)) // Size + KeyHash + RecordType + Data
+	recordSize := 4 + 8 + uint64(len(data)) // Size + KeyHash + Data
 	if s.Size+recordSize > MAX_SEGMENT_SIZE {
 		return 0, ErrSegmentFull
 	}
@@ -102,10 +87,6 @@ func (s *Segment) WriteTypedRecord(keyHash uint64, data []byte, recordType Recor
 	}
 
 	if err := binary.Write(s.File, binary.LittleEndian, record.KeyHash); err != nil {
-		return 0, err
-	}
-
-	if err := binary.Write(s.File, binary.LittleEndian, record.RecordType); err != nil {
 		return 0, err
 	}
 
@@ -124,15 +105,7 @@ func (s *Segment) WriteTypedRecord(keyHash uint64, data []byte, recordType Recor
 	return offset, nil
 }
 
-func (s *Segment) ReadRecord(offset uint64, size uint32) ([]byte, error) {
-	record, err := s.ReadTypedRecord(offset, size)
-	if err != nil {
-		return nil, err
-	}
-	return record.Data, nil
-}
-
-func (s *Segment) ReadTypedRecord(offset uint64, size uint32) (*Record, error) {
+func (s *Segment) ReadRecord(offset uint64, size uint32) (*Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -144,17 +117,12 @@ func (s *Segment) ReadTypedRecord(offset uint64, size uint32) (*Record, error) {
 	// Lire les métadonnées du record
 	var recordSize uint32
 	var keyHash uint64
-	var recordType RecordType
 
 	if err := binary.Read(s.File, binary.LittleEndian, &recordSize); err != nil {
 		return nil, err
 	}
 
 	if err := binary.Read(s.File, binary.LittleEndian, &keyHash); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Read(s.File, binary.LittleEndian, &recordType); err != nil {
 		return nil, err
 	}
 
@@ -165,10 +133,9 @@ func (s *Segment) ReadTypedRecord(offset uint64, size uint32) (*Record, error) {
 	}
 
 	return &Record{
-		Size:       recordSize,
-		KeyHash:    keyHash,
-		RecordType: recordType,
-		Data:       data,
+		Size:    recordSize,
+		KeyHash: keyHash,
+		Data:    data,
 	}, nil
 }
 
@@ -197,31 +164,6 @@ func (s *Segment) calculateChecksum() uint32 {
 	binary.LittleEndian.PutUint64(headerBytes[28:36], s.Header.DataSize)
 	
 	return crc32.ChecksumIEEE(headerBytes)
-}
-
-// WriteChunk écrit un chunk de données dans le segment
-func (s *Segment) WriteChunk(keyHash uint64, chunkData []byte, chunkID uint32) (uint64, error) {
-	return s.WriteTypedRecord(keyHash, chunkData, RecordTypeChunk)
-}
-
-// WriteMetadata écrit les métadonnées d'un fichier chunké
-func (s *Segment) WriteMetadata(keyHash uint64, metadata *FileMetadata) (uint64, error) {
-	metadataBytes := metadata.Serialize()
-	return s.WriteTypedRecord(keyHash, metadataBytes, RecordTypeMetadata)
-}
-
-// ReadMetadata lit les métadonnées d'un fichier chunké
-func (s *Segment) ReadMetadata(offset uint64, size uint32) (*FileMetadata, error) {
-	record, err := s.ReadTypedRecord(offset, size)
-	if err != nil {
-		return nil, err
-	}
-
-	if record.RecordType != RecordTypeMetadata {
-		return nil, errors.New("le record n'est pas de type métadonnées")
-	}
-
-	return DeserializeMetadata(record.Data)
 }
 
 var ErrSegmentFull = errors.New("segment is full")

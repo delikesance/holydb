@@ -23,7 +23,6 @@ type WALEntry struct {
 	Timestamp uint64
 	OpType    OpType
 	KeyHash   uint64
-	DataType  uint8     // Type de données (utilise le même enum que DataType)
 	DataSize  uint32
 	Data      []byte
 	Checksum  uint32
@@ -76,10 +75,6 @@ func (w *WAL) Append(entry WALEntry) error {
 		return err
 	}
 
-	if err := binary.Write(w.writer, binary.LittleEndian, entry.DataType); err != nil {
-		return err
-	}
-
 	if err := binary.Write(w.writer, binary.LittleEndian, entry.DataSize); err != nil {
 		return err
 	}
@@ -128,12 +123,11 @@ func (w *WAL) Close() error {
 	return w.file.Close()
 }
 
-// NewWALEntry crée une nouvelle entrée WAL avec le type spécifié
-func NewWALEntry(opType OpType, keyHash uint64, dataType uint8, data []byte) WALEntry {
+// NewWALEntry crée une nouvelle entrée WAL
+func NewWALEntry(opType OpType, keyHash uint64, data []byte) WALEntry {
 	return WALEntry{
 		OpType:   opType,
 		KeyHash:  keyHash,
-		DataType: dataType,
 		DataSize: uint32(len(data)),
 		Data:     data,
 	}
