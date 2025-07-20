@@ -82,6 +82,12 @@ func (s *Segment) WriteRecord(keyHash uint64, data []byte) (uint64, error) {
 	}
 
 	offset := s.Size
+
+	// Position the file cursor at the end of the segment
+	if _, err := s.File.Seek(int64(offset), 0); err != nil {
+		return 0, err
+	}
+
 	if err := binary.Write(s.File, binary.LittleEndian, record.Size); err != nil {
 		return 0, err
 	}
