@@ -15,8 +15,8 @@ type OpType uint8
 const (
 	OpPut OpType = iota
 	OpDelete
-	OpUpdate   // Mise à jour d'une entrée existante
-	OpCompact  // Opération de compaction
+	OpUpdate
+	OpCompact
 )
 
 type WALEntry struct {
@@ -117,13 +117,12 @@ func (w *WAL) calculateChecksum(entry WALEntry) uint32 {
 }
 
 func (w *WAL) Close() error {
-	w.cancel() // Arrêter la goroutine
+	w.cancel()
 	w.syncTicker.Stop()
 	w.Sync()
 	return w.file.Close()
 }
 
-// NewWALEntry crée une nouvelle entrée WAL
 func NewWALEntry(opType OpType, keyHash uint64, data []byte) WALEntry {
 	return WALEntry{
 		OpType:   opType,

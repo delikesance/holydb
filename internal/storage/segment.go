@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	MAGIC_NUMBER     = 0x434F5245 // CORE
+	MAGIC_NUMBER     = 0x434F5245
 	VERSION          = 1
 	HEADER_SIZE      = 64
-	MAX_SEGMENT_SIZE = 1 << 30 // 1GB
+	MAX_SEGMENT_SIZE = 1 << 30
 )
 
 type SegmentHeader struct {
@@ -76,7 +76,7 @@ func (s *Segment) WriteRecord(keyHash uint64, data []byte) (uint64, error) {
 		Data:    data,
 	}
 
-	recordSize := 4 + 8 + uint64(len(data)) // Size + KeyHash + Data
+	recordSize := 4 + 8 + uint64(len(data))
 	if s.Size+recordSize > MAX_SEGMENT_SIZE {
 		return 0, ErrSegmentFull
 	}
@@ -109,12 +109,10 @@ func (s *Segment) ReadRecord(offset uint64, size uint32) (*Record, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Se positionner au début du record
 	if _, err := s.File.Seek(int64(offset), 0); err != nil {
 		return nil, err
 	}
 
-	// Lire les métadonnées du record
 	var recordSize uint32
 	var keyHash uint64
 
@@ -126,7 +124,6 @@ func (s *Segment) ReadRecord(offset uint64, size uint32) (*Record, error) {
 		return nil, err
 	}
 
-	// Lire les données
 	data := make([]byte, recordSize)
 	if _, err := s.File.Read(data); err != nil {
 		return nil, err
@@ -153,16 +150,15 @@ func (s *Segment) updateHeader() error {
 }
 
 func (s *Segment) calculateChecksum() uint32 {
-	// Calculer CRC32 du header (sans le checksum lui-même)
-	headerBytes := make([]byte, 36) // Magic(4) + Version(4) + SegmentID(8) + Timestamp(8) + RecordCount(4) + DataSize(8)
-	
+	headerBytes := make([]byte, 36)
+
 	binary.LittleEndian.PutUint32(headerBytes[0:4], s.Header.Magic)
 	binary.LittleEndian.PutUint32(headerBytes[4:8], s.Header.Version)
 	binary.LittleEndian.PutUint64(headerBytes[8:16], s.Header.SegmentID)
 	binary.LittleEndian.PutUint64(headerBytes[16:24], s.Header.Timestamp)
 	binary.LittleEndian.PutUint32(headerBytes[24:28], s.Header.RecordCount)
 	binary.LittleEndian.PutUint64(headerBytes[28:36], s.Header.DataSize)
-	
+
 	return crc32.ChecksumIEEE(headerBytes)
 }
 
