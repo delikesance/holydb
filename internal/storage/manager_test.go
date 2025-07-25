@@ -281,8 +281,6 @@ if err == nil {
 func TestStorageManager_WALRecovery(t *testing.T) {
     tmpDir := "testdata_manager_walrecovery"
     defer os.RemoveAll(tmpDir)
-    
-    // First manager - store data
     manager := setupManager(t, tmpDir)
     for i := 1; i <= 3; i++ {
         if err := manager.AddSegment(uint64(i)); err != nil {
@@ -290,31 +288,12 @@ func TestStorageManager_WALRecovery(t *testing.T) {
         }
     }
     if err := manager.StoreData("recover", []byte("recovered")); err != nil {
-        t.Fatalf("StoreData failed: %v", err)
+        t.Fatalf("StoreData failed after recovery: %v", err)
     }
-    
-    // Close the first manager to ensure WAL is flushed
-    if closer, ok := interface{}(manager.walManager).(interface{ Close() error }); ok {
-        if err := closer.Close(); err != nil {
-            t.Fatalf("Failed to close WAL: %v", err)
-        }
-    }
-    
-    // Second manager - should recover from WAL
     manager2 := setupManager(t, tmpDir)
-    // Add segments to manager2 as well since they might not be automatically restored
-    for i := 1; i <= 3; i++ {
-        if err := manager2.AddSegment(uint64(i)); err != nil {
-            t.Fatalf("Failed to add segment %d to manager2: %v", i, err)
-        }
-    }
     got, err := manager2.RetrieveData("recover")
-    if err != nil {
-        t.Errorf("WAL recovery failed - could not retrieve data: %v", err)
-        return
-    }
-    if string(got) != "recovered" {
-        t.Errorf("WAL recovery failed - wrong data: got %s, want recovered", string(got))
+    if err != nil || string(got) != "recovered" {
+        t.Errorf("WAL recovery failed")
     }
 }
 

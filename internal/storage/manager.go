@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -86,17 +85,12 @@ func (sm *StorageManager) RestoreFromWAL() error {
 		name := file.Name()
 		if len(name) >= len(SegmentFilePrefix)+6+len(SegmentFileExt) && name[:len(SegmentFilePrefix)] == SegmentFilePrefix {
 			id := uint64(0)
-			if _, err := fmt.Sscanf(name[len(SegmentFilePrefix):len(SegmentFilePrefix)+6], "%06d", &id); err != nil {
-				fmt.Printf("Warning: failed to parse segment ID from filename %s: %v\n", name, err)
-				continue
-			}
+			fmt.Sscanf(name[len(SegmentFilePrefix):len(SegmentFilePrefix)+6], "%06d", &id)
 			path := filepath.Join(segmentDir, name)
 			seg, err := NewSegment(id, path)
-			if err != nil {
-				fmt.Printf("Warning: failed to open segment %s: %v\n", path, err)
-				continue
+			if err == nil {
+				sm.segments[id] = seg
 			}
-			sm.segments[id] = seg
 		}
 	}
 
@@ -104,117 +98,56 @@ func (sm *StorageManager) RestoreFromWAL() error {
 	walPath := filepath.Join(sm.config.StoragePath, DefaultWALFile)
 	f, err := os.Open(walPath)
 	if err != nil {
-		// If WAL file doesn't exist, it's not an error - just means no recovery needed
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to open WAL file: %w", err)
+		return err
 	}
 	defer f.Close()
-	
-	entryCount := 0
 	for {
 		var entry wal.WALEntry
 		err := binary.Read(f, binary.LittleEndian, &entry.Timestamp)
 		if err != nil {
-			if err == io.EOF {
-				break // Normal end of file
-			}
-			return fmt.Errorf("failed to read WAL entry timestamp at entry %d: %w", entryCount, err)
+			break
 		}
 		err = binary.Read(f, binary.LittleEndian, &entry.OpType)
 		if err != nil {
-			return fmt.Errorf("failed to read WAL entry optype at entry %d: %w", entryCount, err)
+			break
 		}
 		err = binary.Read(f, binary.LittleEndian, &entry.KeyHash)
 		if err != nil {
-			return fmt.Errorf("failed to read WAL entry keyhash at entry %d: %w", entryCount, err)
+			break
 		}
 		err = binary.Read(f, binary.LittleEndian, &entry.DataSize)
 		if err != nil {
-			return fmt.Errorf("failed to read WAL entry datasize at entry %d: %w", entryCount, err)
+			break
 		}
-		
-		// Validate data size to prevent potential memory issues
-		if entry.DataSize > MaxDocumentSize {
-			return fmt.Errorf("WAL entry %d has invalid data size %d (exceeds max %d)", entryCount, entry.DataSize, MaxDocumentSize)
-		}
-		
 		entry.Data = make([]byte, entry.DataSize)
-		n, err := f.Read(entry.Data)
-		if err != nil {
-			return fmt.Errorf("failed to read WAL entry data at entry %d: %w", entryCount, err)
-		}
-		if n != int(entry.DataSize) {
-			return fmt.Errorf("WAL entry %d: incomplete data read (expected %d, got %d)", entryCount, entry.DataSize, n)
-		}
+		_, err = f.Read(entry.Data)
 		if err != nil {
 			break
 		}
 		err = binary.Read(f, binary.LittleEndian, &entry.Checksum)
 		if err != nil {
-			return fmt.Errorf("failed to read WAL entry checksum at entry %d: %w", entryCount, err)
+			break
 		}
-
-		// TODO: Validate checksum here to ensure data integrity
 
 		switch entry.OpType {
 		case wal.OpPut, wal.OpUpdate:
-			// Restore data using the same logic as StoreData (without WAL logging)
+			// Use FileManager to store file
 			key := fmt.Sprintf("%d", entry.KeyHash)
-			
-			// Store data in the first segment with enough space
-			stored := false
-			for segID, seg := range sm.segments {
-				// Check if segment has enough space
-				if hasSpace, ok := interface{}(seg).(interface{ HasSpace(size uint32) bool }); ok {
-					if !hasSpace.HasSpace(uint32(len(entry.Data))) {
-						continue
-					}
-				} else if segSize, ok := interface{}(seg).(interface{ CurrentSize() uint64 }); ok {
-					if segSize.CurrentSize()+uint64(len(entry.Data)) > SegmentSize {
-						continue
-					}
-				}
-				offset, err := seg.WriteRecord(entry.KeyHash, entry.Data)
-				if err != nil {
-					fmt.Printf("Error during WAL recovery - failed to write record %s: %v\n", key, err)
-					continue
-				}
-				indexEntry := index.IndexEntry{
-					KeyHash:   entry.KeyHash,
-					Size:      uint32(len(entry.Data)),
-					SegmentID: uint32(segID),
-					Offset:    offset,
-					Timestamp: entry.Timestamp,
-				}
-				if err := sm.indexManager.Insert(indexEntry); err != nil {
-					fmt.Printf("Error during WAL recovery - failed to insert into index %s: %v\n", key, err)
-					continue
-				}
-				stored = true
-				break
-			}
-			if !stored {
-				fmt.Printf("Error during WAL recovery - no segment with enough space for key %s\n", key)
-			}
+			var segments []*Segment
+for _, seg := range sm.segments {
+    segments = append(segments, seg)
+}
+_, _ = sm.fileManager.StoreFile(key, entry.Data, segments, sm.indexManager)
 		case wal.OpDelete:
 			// Use FileManager to delete file (assume DeleteFile exists)
 			key := fmt.Sprintf("%d", entry.KeyHash)
 			if del, ok := interface{}(sm.fileManager).(interface{ DeleteFile(string) error }); ok {
-				if err := del.DeleteFile(key); err != nil {
-					// Log error but continue recovery process
-					fmt.Printf("Error during WAL recovery - failed to delete file %s: %v\n", key, err)
-				}
+				_ = del.DeleteFile(key)
 			}
 		case wal.OpCompact:
 			// Skip or handle compaction
 		}
-		
-		entryCount++
 	}
-	
-	fmt.Printf("WAL recovery completed: processed %d entries\n", entryCount)
 	return nil
 }
 
@@ -252,12 +185,10 @@ func (sm *StorageManager) DeleteFile(key string) error {
 	}
 	if del, ok := interface{}(sm.fileManager).(interface{ DeleteFile(string) error }); ok {
 		if err := del.DeleteFile(key); err != nil {
-			return fmt.Errorf("failed to delete file from file manager: %w", err)
+			return err
 		}
 	}
-	if err := sm.indexManager.Delete(HashKey(key)); err != nil {
-		return fmt.Errorf("failed to delete from index: %w", err)
-	}
+	sm.indexManager.Delete(HashKey(key))
 	return nil
 }
 
@@ -280,19 +211,13 @@ func (sm *StorageManager) DeleteData(key string) error {
 	}
 	keyHash = HashKey(key)
 	// Attempt to delete data from all segments (real impl should track location)
-	var lastError error
 	for _, seg := range sm.segments {
 		if del, ok := interface{}(seg).(interface{ DeleteRecord(uint64) error }); ok {
-			if err := del.DeleteRecord(keyHash); err != nil {
-				lastError = err // Keep track of the last error but continue
-			}
+			_ = del.DeleteRecord(keyHash)
 		}
 	}
-	if err := sm.indexManager.Delete(HashKey(key)); err != nil {
-		return fmt.Errorf("failed to delete from index: %w", err)
-	}
-	// Return the last segment deletion error if any occurred
-	return lastError
+	sm.indexManager.Delete(HashKey(key))
+	return nil
 }
 
 // UpdateData deletes then stores data
@@ -338,9 +263,7 @@ func (sm *StorageManager) StoreData(key string, data []byte) error {
 			Offset:    offset,
 			Timestamp: 0, // TODO: set actual timestamp if needed
 		}
-		if err := sm.indexManager.Insert(entry); err != nil {
-			return fmt.Errorf("failed to insert into index: %w", err)
-		}
+		sm.indexManager.Insert(entry)
 		return nil
 	}
 	return errors.New("no segment with enough space available")
